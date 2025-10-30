@@ -29,22 +29,20 @@ jobs:
       - name: Build (Windows)
         if: contains(matrix.os, 'windows')
         run: |
-          pyinstaller --onefile --windowed --name OdontoPrice \
-            --collect-all PySide6 \
-            qt_app.py
+          pyinstaller --noconfirm --onefile --windowed --name OdontoPrice qt_app.py
 
       - name: Build (macOS)
         if: contains(matrix.os, 'macos')
         run: |
-          pyinstaller --onefile --windowed --name OdontoPrice \
-            --collect-all PySide6 \
-            qt_app.py
+          # Em macOS, prefira onedir (.app bundle) para compatibilidade
+          pyinstaller --noconfirm --windowed --name OdontoPrice qt_app.py
 
       - name: Package (macOS zip)
         if: contains(matrix.os, 'macos')
         run: |
           cd dist
-          zip -j OdontoPrice-macos.zip OdontoPrice || true
+          # Compacta o bundle .app inteiro
+          zip -r OdontoPrice-macos.zip OdontoPrice.app || true
 
       - name: Upload artifact (Windows)
         if: contains(matrix.os, 'windows')
