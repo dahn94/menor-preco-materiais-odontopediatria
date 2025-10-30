@@ -77,7 +77,7 @@ Como baixar:
 
 Artefatos gerados:
 - Windows: `OdontoPrice-windows` (contém `dist/OdontoPrice.exe`)
-- macOS: `OdontoPrice-macos` (contém `dist/OdontoPrice-macos.zip`)
+- macOS: `OdontoPrice-macos` (contém `dist/OdontoPrice-macos.zip` com o bundle `OdontoPrice.app`)
 
 ## 🖥️ Compatibilidade Multiplataforma
 
