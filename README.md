@@ -183,4 +183,4 @@ Para suporte ou reportar bugs:
 
 ---
 
-**Desenvolvido com ❤️ para a comunidade odontológica**
+**Desenvolvido com ❤️ para a minha namorada e a comunidade odontológica**
