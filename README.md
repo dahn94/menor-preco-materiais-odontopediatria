@@ -71,6 +71,9 @@ Você pode baixar os binários gerados automaticamente pelos workflows na aba Ac
    - Homolog (prerelease): roda automaticamente em push/merge para `develop` e publica uma prerelease com os binários.
    - Release: ao criar uma tag `vX.Y.Z` (ex.: `v1.0.0`) ele publica uma Release com os binários.
 
+Permissões necessárias (repo):
+- Settings → Actions → General → Workflow permissions → selecione “Read and write permissions”.
+
 Como baixar:
 - Homolog: merge/push em `develop` → Release (prerelease) “Homolog <run_number>” com `OdontoPrice.exe` e `OdontoPrice-macos.zip`.
 - Release: criar tag `vX.Y.Z` → Release com os binários anexados.
