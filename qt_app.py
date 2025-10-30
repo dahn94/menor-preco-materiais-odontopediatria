@@ -5,6 +5,10 @@ import sys
 import csv
 import platform
 from dataclasses import dataclass, field
+import json
+import os
+import sqlite3
+import shutil
 from pathlib import Path
 from typing import Dict, List
 
@@ -56,6 +60,9 @@ class JanelaPrincipal(QMainWindow):
         self.fornecedores_data: Dict[str, List[FornecedorItem]] = {}
         self.current_file: Path | None = None
         self.is_dirty: bool = False
+        # Banco de dados SQLite
+        self.db = Database(self._default_data_path())
+        self.current_file = self.db.path
 
         # UI
         container = QWidget()
@@ -164,6 +171,9 @@ class JanelaPrincipal(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Pronto")
 
+        # Carregar dados do banco
+        self._load_from_db_to_memory()
+
     # ======= Persistência =======
     def mark_dirty(self, dirty: bool = True):
         self.is_dirty = dirty
@@ -173,98 +183,68 @@ class JanelaPrincipal(QMainWindow):
         if self.is_dirty:
             title += " *"
         self.setWindowTitle(title)
+        # Persistência automática em segundo plano
+        if dirty:
+            try:
+                self._autosave_silent()
+            except Exception:
+                pass
 
-    def to_dict(self) -> dict:
-        return {
-            "produtos": [
-                {
-                    "nome": p.nome,
-                    "categoria": p.categoria,
-                    "quantidade": p.quantidade,
-                    "unidade": p.unidade,
-                }
-                for p in self.produtos
-            ],
-            "fornecedores": {
-                nome: [
-                    {
-                        "fornecedor": it.fornecedor,
-                        "marca": it.marca,
-                        "preco_unitario": it.preco_unitario,
-                        "quantidade": it.quantidade,
-                        "frete": it.frete,
-                        "prazo": it.prazo,
-                        "observacoes": it.observacoes,
-                    }
-                    for it in itens
-                ]
-                for nome, itens in self.fornecedores_data.items()
-            },
-            "version": 1,
-        }
-
-    def load_dict(self, data: dict):
-        self.produtos.clear()
-        self.fornecedores_data.clear()
-        for pd in data.get("produtos", []):
-            self.produtos.append(Produto(
-                nome=pd.get("nome", ""),
-                categoria=pd.get("categoria", ""),
-                quantidade=int(pd.get("quantidade", 1)),
-                unidade=pd.get("unidade", "Unidade"),
-            ))
-        for nome, itens in data.get("fornecedores", {}).items():
-            self.fornecedores_data[nome] = []
-            for it in itens:
-                self.fornecedores_data[nome].append(FornecedorItem(
-                    fornecedor=it.get("fornecedor", ""),
-                    marca=it.get("marca", ""),
-                    preco_unitario=float(it.get("preco_unitario", 0.0)),
-                    quantidade=int(it.get("quantidade", 1)),
-                    frete=float(it.get("frete", 0.0)),
-                    prazo=it.get("prazo", ""),
-                    observacoes=it.get("observacoes", ""),
-                ))
+    def _load_from_db_to_memory(self):
+        self.produtos = self.db.list_products()
+        self.fornecedores_data = {p.nome: self.db.list_offers_by_product(p.nome) for p in self.produtos}
         self._refresh_produtos_combo()
-        # repopular tabela
         self.table.setRowCount(0)
-        for prod in self.produtos:
-            for it in self.fornecedores_data.get(prod.nome, []):
-                self._append_table_row(prod.nome, it)
+        if self.cmb_filtro_produto.currentText():
+            self._refresh_filtered_table()
         self.mark_dirty(False)
+
+    def _autosave_now(self):
+        """Garante que o banco está com commit persistido e caminho atual definido."""
+        try:
+            if self.db and self.db.conn:
+                self.db.conn.commit()
+            if not self.current_file:
+                self.current_file = self.db.path
+        except Exception:
+            pass
 
     def file_new(self):
         if not self._maybe_save_changes():
             return
-        self.produtos.clear()
-        self.fornecedores_data.clear()
-        self.table.setRowCount(0)
-        self._refresh_produtos_combo()
-        self.current_file = None
-        self.mark_dirty(False)
+        path, _ = QFileDialog.getSaveFileName(self, "Criar banco", "", "Banco (*.sqlite)")
+        if not path:
+            return
+        if not path.lower().endswith('.sqlite'):
+            path += '.sqlite'
+        try:
+            self.db = Database(Path(path))
+            self.current_file = Path(path)
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage(f"Banco criado: {self.current_file}", 3000)
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao criar banco:\n{e}")
 
     def file_open(self):
         if not self._maybe_save_changes():
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Abrir projeto", "", "Projeto (*.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "Abrir banco", "", "Banco (*.sqlite)")
         if not path:
             return
-        import json
         try:
-            with open(path, "r", encoding="utf-8") as fp:
-                data = json.load(fp)
-            self.load_dict(data)
+            self.db = Database(Path(path))
             self.current_file = Path(path)
-            self.statusBar().showMessage(f"Projeto carregado: {self.current_file}", 3000)
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage(f"Banco carregado: {self.current_file}", 3000)
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Falha ao abrir arquivo:\n{e}")
+            QMessageBox.critical(self, "Erro", f"Falha ao abrir banco:\n{e}")
 
     def file_save_as(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Salvar projeto como", "", "Projeto (*.json)")
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar banco como", "", "Banco (*.sqlite)")
         if not path:
             return False
-        if not path.lower().endswith(".json"):
-            path += ".json"
+        if not path.lower().endswith(".sqlite"):
+            path += ".sqlite"
         self.current_file = Path(path)
         return self._write_current_file()
 
@@ -274,16 +254,58 @@ class JanelaPrincipal(QMainWindow):
         return self._write_current_file()
 
     def _write_current_file(self):
-        import json
         try:
-            with open(self.current_file, "w", encoding="utf-8") as fp:
-                json.dump(self.to_dict(), fp, ensure_ascii=False, indent=2)
+            # Salvar/cópia física do banco atual
+            if self.db and self.db.path and self.current_file:
+                if Path(self.db.path) != self.current_file:
+                    shutil.copyfile(self.db.path, self.current_file)
+                self.db = Database(self.current_file)
             self.mark_dirty(False)
-            self.statusBar().showMessage(f"Projeto salvo: {self.current_file}", 3000)
+            self.statusBar().showMessage(f"Banco salvo: {self.current_file}", 3000)
             return True
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Falha ao salvar arquivo:\n{e}")
+            QMessageBox.critical(self, "Erro", f"Falha ao salvar banco:\n{e}")
             return False
+
+    def _autosave_silent(self):
+        """Salva automaticamente no arquivo padrão, sem diálogos."""
+        # DB já grava a cada operação; apenas garante que temos um caminho atual
+        if not self.current_file:
+            self.current_file = self._default_data_path()
+
+    def _load_default_if_present(self):
+        path = self._default_data_path()
+        if path.exists():
+            self.db = Database(path)
+            self.current_file = path
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage(f"Banco carregado: {self.current_file}", 3000)
+        else:
+            fb = self._fallback_user_data_path()
+            if fb.exists():
+                self.db = Database(fb)
+                self.current_file = fb
+                self._load_from_db_to_memory()
+                self.statusBar().showMessage(f"Banco carregado: {self.current_file}", 3000)
+
+    def _default_data_path(self) -> Path:
+        # Preferir pasta de instalação (ao lado do executável/script)
+        if getattr(sys, 'frozen', False):
+            app_dir = Path(sys.executable).resolve().parent
+        else:
+            app_dir = Path(__file__).resolve().parent
+        target = app_dir / 'dados.sqlite'
+        return target
+
+    def _fallback_user_data_path(self) -> Path:
+        system = platform.system()
+        if system == 'Darwin':
+            base = Path.home() / 'Library' / 'Application Support' / 'OdontoPrice'
+        elif system == 'Windows':
+            base = Path(os.environ.get('APPDATA', str(Path.home() / 'AppData' / 'Roaming'))) / 'OdontoPrice'
+        else:
+            base = Path.home() / '.local' / 'share' / 'odonto_price'
+        return base / 'dados.json'
 
     def _maybe_save_changes(self) -> bool:
         if not self.is_dirty:
@@ -337,10 +359,9 @@ class JanelaPrincipal(QMainWindow):
             QMessageBox.warning(self, "Atenção", "Preencha o nome e a categoria do produto!")
             return
 
-        prod = Produto(nome=nome, categoria=cat, quantidade=qtd, unidade=un)
-        self.produtos.append(prod)
-        self.fornecedores_data[prod.nome] = []
-        self._refresh_produtos_combo()
+        self.db.upsert_product(nome, cat, qtd, un)
+        self._autosave_now()
+        self._load_from_db_to_memory()
         self.ed_nome.clear()
         self.spin_qtd.setValue(1)
         self.statusBar().showMessage(f"Produto '{nome}' adicionado", 3000)
@@ -381,19 +402,9 @@ class JanelaPrincipal(QMainWindow):
             return
 
         qtd = next((p.quantidade for p in self.produtos if p.nome == produto), 1)
-        item = FornecedorItem(
-            fornecedor=fornecedor,
-            marca=marca,
-            preco_unitario=preco,
-            quantidade=qtd,
-            frete=frete,
-            prazo=prazo,
-            observacoes=obs,
-        )
-        self.fornecedores_data[produto].append(item)
-        # Se o filtro estiver no produto atual, adiciona na tabela
-        if self.cmb_filtro_produto.currentText() == produto:
-            self._append_table_row(produto, item)
+        self.db.add_offer(produto, fornecedor, marca, preco, qtd, frete, prazo, obs)
+        self._autosave_now()
+        self._load_from_db_to_memory()
 
         self.ed_fornecedor.clear()
         self.ed_marca.clear()
@@ -426,10 +437,10 @@ class JanelaPrincipal(QMainWindow):
     def mostrar_melhor_opcao(self):
         # Prioriza a aba de filtro
         produto = self.cmb_filtro_produto.currentText() or self.cmb_produto_sel.currentText()
-        if not produto or produto not in self.fornecedores_data:
+        if not produto:
             QMessageBox.warning(self, "Atenção", "Selecione um produto com fornecedores!")
             return
-        itens = self.fornecedores_data[produto]
+        itens = self.db.list_offers_by_product(produto)
         if not itens:
             QMessageBox.warning(self, "Atenção", "Nenhum fornecedor cadastrado!")
             return
@@ -463,7 +474,7 @@ class JanelaPrincipal(QMainWindow):
         pasta = Path(dirpath)
 
         for prod in self.produtos:
-            itens = self.fornecedores_data.get(prod.nome, [])
+            itens = self.db.list_offers_by_product(prod.nome)
             if not itens:
                 continue
             caminho = pasta / f"{self._sanitize_filename(prod.nome) }.csv"
@@ -489,21 +500,165 @@ class JanelaPrincipal(QMainWindow):
     def limpar_tudo(self):
         if QMessageBox.question(self, "Confirmação", "Deseja realmente limpar todos os dados?") != QMessageBox.Yes:
             return
-        self.produtos.clear()
-        self.fornecedores_data.clear()
-        self.table.setRowCount(0)
-        self._refresh_produtos_combo()
+        # Limpa banco atual
+        if self.db and self.db.path:
+            try:
+                Path(self.db.path).unlink(missing_ok=True)
+            except Exception:
+                pass
+            self.db = Database(self._default_data_path())
+        self._load_from_db_to_memory()
         self.statusBar().showMessage("Dados limpos", 3000)
         self.current_file = None
         self.mark_dirty(True)
+
+    def closeEvent(self, event):
+        try:
+            # Salvar silenciosamente antes de fechar
+            self._autosave_silent()
+        except Exception:
+            pass
+        super().closeEvent(event)
 
     def _refresh_filtered_table(self):
         self.table.setRowCount(0)
         produto = self.cmb_filtro_produto.currentText()
         if not produto:
             return
-        for it in self.fornecedores_data.get(produto, []):
+        for it in self.db.list_offers_by_product(produto):
             self._append_table_row(produto, it)
+
+
+class Database:
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.conn = sqlite3.connect(self.path)
+        self.conn.execute('PRAGMA foreign_keys = ON;')
+        self.conn.execute('PRAGMA journal_mode = WAL;')
+        self.conn.execute('PRAGMA synchronous = NORMAL;')
+        self._init_schema()
+
+    def _init_schema(self):
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                category TEXT,
+                quantity INTEGER NOT NULL,
+                unit TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS suppliers (
+                id INTEGER PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS offers (
+                id INTEGER PRIMARY KEY,
+                product_id INTEGER NOT NULL,
+                supplier_id INTEGER NOT NULL,
+                brand TEXT,
+                unit_price REAL NOT NULL,
+                quantity INTEGER NOT NULL,
+                freight REAL NOT NULL,
+                deadline TEXT,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,
+                FOREIGN KEY(supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE
+            );
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_offers_product ON offers(product_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_offers_supplier ON offers(supplier_id);")
+        self.conn.commit()
+
+    def upsert_product(self, name: str, category: str, quantity: int, unit: str) -> int:
+        cur = self.conn.cursor()
+        cur.execute("SELECT id FROM products WHERE name = ?", (name,))
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                "UPDATE products SET category=?, quantity=?, unit=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (category, quantity, unit, row[0]),
+            )
+            self.conn.commit()
+            return row[0]
+        cur.execute(
+            "INSERT INTO products(name, category, quantity, unit) VALUES (?, ?, ?, ?)",
+            (name, category, quantity, unit),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_product_quantity(self, name: str) -> int | None:
+        cur = self.conn.cursor()
+        cur.execute("SELECT quantity FROM products WHERE name = ?", (name,))
+        row = cur.fetchone()
+        return int(row[0]) if row else None
+
+    def upsert_supplier(self, name: str) -> int:
+        cur = self.conn.cursor()
+        cur.execute("SELECT id FROM suppliers WHERE name = ?", (name,))
+        row = cur.fetchone()
+        if row:
+            return row[0]
+        cur.execute("INSERT INTO suppliers(name) VALUES (?)", (name,))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def add_offer(self, product_name: str, supplier_name: str, brand: str, unit_price: float, quantity: int, freight: float, deadline: str, notes: str):
+        pid = self.upsert_product(product_name, '', quantity, '')
+        sid = self.upsert_supplier(supplier_name)
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO offers(product_id, supplier_id, brand, unit_price, quantity, freight, deadline, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (pid, sid, brand, unit_price, quantity, freight, deadline, notes),
+        )
+        self.conn.commit()
+
+    def list_products(self) -> List[Produto]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT name, category, quantity, unit FROM products ORDER BY name COLLATE NOCASE")
+        rows = cur.fetchall()
+        return [Produto(nome=r[0], categoria=r[1] or '', quantidade=int(r[2]), unidade=r[3] or 'Unidade') for r in rows]
+
+    def list_offers_by_product(self, product_name: str) -> List[FornecedorItem]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT s.name as fornecedor, o.brand, o.unit_price, o.quantity, o.freight, o.deadline, o.notes
+            FROM offers o
+            JOIN products p ON p.id = o.product_id
+            JOIN suppliers s ON s.id = o.supplier_id
+            WHERE p.name = ?
+            ORDER BY (o.unit_price * o.quantity + o.freight) ASC
+            """,
+            (product_name,),
+        )
+        rows = cur.fetchall()
+        items: List[FornecedorItem] = []
+        for r in rows:
+            items.append(FornecedorItem(
+                fornecedor=r[0], marca=r[1] or '', preco_unitario=float(r[2]), quantidade=int(r[3]), frete=float(r[4]), prazo=r[5] or '', observacoes=r[6] or ''
+            ))
+        return items
 
     def _sanitize_filename(self, name: str) -> str:
         if platform.system() == 'Windows':
