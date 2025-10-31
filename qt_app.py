@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QComboBox, QSpinBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
+    QComboBox, QSpinBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QFileDialog, QMessageBox, QFormLayout, QGroupBox, QStatusBar, QTabWidget,
     QDialog, QDialogButtonBox
 )
@@ -152,9 +152,14 @@ class JanelaPrincipal(QMainWindow):
         prod_bar.addWidget(btn_edit_prod)
         prod_bar.addWidget(btn_del_prod)
         lay_produtos.addLayout(prod_bar)
-        self.prod_table = QTableWidget(0, 5)
-        self.prod_table.setHorizontalHeaderLabels(["ID", "Nome", "Categoria", "Qtd", "Unidade"])
+        # adicionar coluna de Ações (editar / deletar por linha)
+        self.prod_table = QTableWidget(0, 6)
+        self.prod_table.setHorizontalHeaderLabels(["ID", "Nome", "Categoria", "Qtd", "Unidade", "Ações"])
         self.prod_table.hideColumn(0)
+        # evitar edição direta e selecionar a linha inteira
+        self.prod_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.prod_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.prod_table.setSelectionMode(QAbstractItemView.SingleSelection)
         lay_produtos.addWidget(self.prod_table)
         self.lista_tabs.addTab(produtos_tab, "Produtos")
 
@@ -170,13 +175,18 @@ class JanelaPrincipal(QMainWindow):
         forn_bar.addWidget(btn_del_forn)
         lay_fornecedores.addLayout(forn_bar)
         # agora a tabela de fornecedores exibe as ofertas completas (uma linha por oferta)
-        self.forn_table = QTableWidget(0, 11)
+        # Fornecedores agora exibe ofertas: adiciona coluna de Ações
+        self.forn_table = QTableWidget(0, 12)
         self.forn_table.setHorizontalHeaderLabels([
             "offer_id", "Produto", "Fornecedor", "Marca", "Preço Unit.", "Qtd",
-            "Subtotal", "Frete", "Total", "Prazo", "Observações"
+            "Subtotal", "Frete", "Total", "Prazo", "Observações", "Ações"
         ])
         # esconder a coluna offer_id (usada internamente)
         self.forn_table.hideColumn(0)
+        # evitar edição direta e selecionar a linha inteira
+        self.forn_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.forn_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.forn_table.setSelectionMode(QAbstractItemView.SingleSelection)
         lay_fornecedores.addWidget(self.forn_table)
         self.lista_tabs.addTab(ofertas_tab, "Ofertas")
 
@@ -194,7 +204,7 @@ class JanelaPrincipal(QMainWindow):
         btn_export = QPushButton("💾 Exportar CSV (Melhores)")
         btn_export.clicked.connect(self.exportar_csv)
 
-    # filtro bar: apenas seleção e ações não-destrutivas
+        # filtro bar: apenas seleção e ações não-destrutivas
         bar_filtro.addWidget(lbl_prod)
         bar_filtro.addWidget(self.cmb_filtro_produto, 1)
         bar_filtro.addWidget(btn_melhor)
@@ -649,6 +659,108 @@ class JanelaPrincipal(QMainWindow):
         # antigo: deletar fornecedor. Agora ofertas são mostradas aqui; delegar para exclusão de oferta
         QMessageBox.information(self, "Atenção", "Use 'Deletar Oferta' para remover o registro específico de oferta.")
 
+    # Helper methods that operate by id (used by per-row action buttons)
+    def edit_product_by_id(self, prod_id: int | None):
+        if prod_id is None:
+            QMessageBox.warning(self, "Atenção", "Produto inválido")
+            return
+        prod = next((p for p in self.produtos if p.id == prod_id), None)
+        if not prod:
+            QMessageBox.warning(self, "Atenção", "Produto não encontrado")
+            return
+        result = self._show_edit_product_dialog(prod)
+        if not result:
+            return
+        try:
+            new_name = result['name']
+            category = result['category']
+            quantity = int(result['quantity'])
+            unit = result['unit']
+        except Exception:
+            QMessageBox.critical(self, "Erro", "Valores inválidos")
+            return
+        ok = self.db.update_product(prod.nome, new_name, category, quantity, unit)
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Produto atualizado", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao atualizar produto (talvez nome já exista)")
+
+    def delete_product_by_id(self, prod_id: int | None):
+        if prod_id is None:
+            QMessageBox.warning(self, "Atenção", "Produto inválido")
+            return
+        prod = next((p for p in self.produtos if p.id == prod_id), None)
+        if not prod:
+            QMessageBox.warning(self, "Atenção", "Produto não encontrado")
+            return
+        name = prod.nome
+        count = self.db.count_offers_for_product(name)
+        if count > 0:
+            resp = QMessageBox.question(
+                self,
+                "Confirmação",
+                f"O produto '{name}' tem {count} fornecedor(es) associado(s).\nDeseja realmente deletar o produto e todas as ofertas relacionadas?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if resp != QMessageBox.Yes:
+                return
+        else:
+            if QMessageBox.question(self, "Confirmação", f"Deseja deletar o produto '{name}'?") != QMessageBox.Yes:
+                return
+        ok = self.db.delete_product(name)
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Produto deletado", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao deletar produto")
+
+    def edit_offer_by_id(self, offer_id: int | None):
+        if offer_id is None:
+            QMessageBox.warning(self, "Atenção", "Oferta inválida")
+            return
+        info = self.db.get_offer_by_id(int(offer_id))
+        if not info:
+            QMessageBox.warning(self, "Atenção", "Oferta não encontrada no banco")
+            return
+        product_name, fi = info
+        result = self._show_edit_offer_dialog(product_name, fi)
+        if not result:
+            return
+        try:
+            brand = result['brand']
+            unit_price = float(result['unit_price'])
+            quantity = int(result['quantity'])
+            freight = float(result['freight'])
+            deadline = result['deadline']
+            notes = result['notes']
+        except Exception:
+            QMessageBox.critical(self, "Erro", "Valores inválidos")
+            return
+        ok = self.db.update_offer(int(offer_id), brand, unit_price, quantity, freight, deadline, notes)
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Oferta atualizada", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao atualizar oferta")
+
+    def delete_offer_by_id(self, offer_id: int | None):
+        if offer_id is None:
+            QMessageBox.warning(self, "Atenção", "Oferta inválida")
+            return
+        if QMessageBox.question(self, "Confirmação", "Deseja realmente deletar a oferta selecionada?") != QMessageBox.Yes:
+            return
+        ok = self.db.delete_offer(int(offer_id))
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Oferta deletada", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao deletar oferta")
     def _append_table_row(self, produto: str, f: FornecedorItem):
         r = self.table.rowCount()
         self.table.insertRow(r)
@@ -776,6 +888,24 @@ class JanelaPrincipal(QMainWindow):
             self.prod_table.setItem(r, 2, cat_item)
             self.prod_table.setItem(r, 3, qtd_item)
             self.prod_table.setItem(r, 4, unit_item)
+            # ações: Editar / Deletar
+            w = QWidget()
+            hb = QHBoxLayout(w)
+            hb.setContentsMargins(0, 0, 0, 0)
+            btn_e = QPushButton("✏️")
+            btn_e.setToolTip("Editar produto")
+            btn_e.setFixedSize(QSize(28, 24))
+            btn_d = QPushButton("🗑️")
+            btn_d.setToolTip("Deletar produto")
+            btn_d.setFixedSize(QSize(28, 24))
+            hb.addWidget(btn_e)
+            hb.addWidget(btn_d)
+            hb.addStretch()
+            # conectar com id atual
+            pid = int(p.id) if p.id is not None else None
+            btn_e.clicked.connect(lambda _checked, pid=pid: self.edit_product_by_id(pid))
+            btn_d.clicked.connect(lambda _checked, pid=pid: self.delete_product_by_id(pid))
+            self.prod_table.setCellWidget(r, 5, w)
 
     def _refresh_forn_list(self):
         if not hasattr(self, 'forn_table'):
@@ -811,6 +941,23 @@ class JanelaPrincipal(QMainWindow):
             self.forn_table.setItem(r, 8, total_item)
             self.forn_table.setItem(r, 9, prazo_item)
             self.forn_table.setItem(r, 10, notes_item)
+            # coluna de ações
+            aw = QWidget()
+            ah = QHBoxLayout(aw)
+            ah.setContentsMargins(0, 0, 0, 0)
+            btn_edit = QPushButton("✏️")
+            btn_edit.setToolTip("Editar oferta")
+            btn_edit.setFixedSize(QSize(28, 24))
+            btn_del = QPushButton("🗑️")
+            btn_del.setToolTip("Deletar oferta")
+            btn_del.setFixedSize(QSize(28, 24))
+            ah.addWidget(btn_edit)
+            ah.addWidget(btn_del)
+            ah.addStretch()
+            oid = int(offer_id)
+            btn_edit.clicked.connect(lambda _checked, oid=oid: self.edit_offer_by_id(oid))
+            btn_del.clicked.connect(lambda _checked, oid=oid: self.delete_offer_by_id(oid))
+            self.forn_table.setCellWidget(r, 11, aw)
 
     def edit_selected_offer(self):
         row = self.table.currentRow()
