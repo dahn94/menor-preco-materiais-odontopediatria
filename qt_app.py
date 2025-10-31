@@ -17,25 +17,31 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QComboBox, QSpinBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QFileDialog, QMessageBox, QFormLayout, QGroupBox, QStatusBar, QTabWidget
+    QFileDialog, QMessageBox, QFormLayout, QGroupBox, QStatusBar, QTabWidget,
+    QDialog, QDialogButtonBox
 )
+
 
 
 @dataclass
 class Produto:
-    nome: str
-    categoria: str
-    quantidade: int
-    unidade: str
+    id: int | None = None
+    nome: str = ""
+    categoria: str = ""
+    quantidade: int = 0
+    unidade: str = ""
 
 
 @dataclass
 class FornecedorItem:
-    fornecedor: str
-    marca: str
-    preco_unitario: float
-    quantidade: int
-    frete: float
+    # optional identifiers to track DB rows
+    id: int | None = None
+    supplier_id: int | None = None
+    fornecedor: str = ""
+    marca: str = ""
+    preco_unitario: float = 0.0
+    quantidade: int = 0
+    frete: float = 0.0
     prazo: str = ""
     observacoes: str = ""
 
@@ -115,6 +121,7 @@ class JanelaPrincipal(QMainWindow):
         btn_add_forn = QPushButton("➕ Adicionar Fornecedor")
         btn_add_forn.clicked.connect(self.adicionar_fornecedor)
 
+        # product selector (no inline edit/delete here - Lista tab centraliza edição/remoção)
         form_f.addRow("Produto:", self.cmb_produto_sel)
         form_f.addRow("Fornecedor:", self.ed_fornecedor)
         form_f.addRow("Marca:", self.ed_marca)
@@ -129,6 +136,48 @@ class JanelaPrincipal(QMainWindow):
         lay_cadastro.addWidget(grp_forn)
         self.tabs.addTab(tab_cadastro, "Cadastro")
 
+        # Tab Lista (produtos / fornecedores)
+        tab_lista = QWidget()
+        lay_lista = QVBoxLayout(tab_lista)
+        self.lista_tabs = QTabWidget()
+
+        # Produtos tab
+        produtos_tab = QWidget()
+        lay_produtos = QVBoxLayout(produtos_tab)
+        prod_bar = QHBoxLayout()
+        btn_edit_prod = QPushButton("✏️ Editar Produto")
+        btn_edit_prod.clicked.connect(self.edit_product_from_list)
+        btn_del_prod = QPushButton("🗑️ Deletar Produto")
+        btn_del_prod.clicked.connect(self.delete_product_from_list)
+        prod_bar.addWidget(btn_edit_prod)
+        prod_bar.addWidget(btn_del_prod)
+        lay_produtos.addLayout(prod_bar)
+        self.prod_table = QTableWidget(0, 5)
+        self.prod_table.setHorizontalHeaderLabels(["ID", "Nome", "Categoria", "Qtd", "Unidade"])
+        self.prod_table.hideColumn(0)
+        lay_produtos.addWidget(self.prod_table)
+        self.lista_tabs.addTab(produtos_tab, "Produtos")
+
+        # Fornecedores tab
+        fornecedores_tab = QWidget()
+        lay_fornecedores = QVBoxLayout(fornecedores_tab)
+        forn_bar = QHBoxLayout()
+        btn_edit_forn = QPushButton("✏️ Editar Fornecedor")
+        btn_edit_forn.clicked.connect(self.edit_supplier_from_list)
+        btn_del_forn = QPushButton("🗑️ Deletar Fornecedor")
+        btn_del_forn.clicked.connect(self.delete_supplier_from_list)
+        forn_bar.addWidget(btn_edit_forn)
+        forn_bar.addWidget(btn_del_forn)
+        lay_fornecedores.addLayout(forn_bar)
+        self.forn_table = QTableWidget(0, 3)
+        self.forn_table.setHorizontalHeaderLabels(["ID", "Fornecedor", "#Ofertas"])
+        self.forn_table.hideColumn(0)
+        lay_fornecedores.addWidget(self.forn_table)
+        self.lista_tabs.addTab(fornecedores_tab, "Fornecedores")
+
+        lay_lista.addWidget(self.lista_tabs)
+        self.tabs.addTab(tab_lista, "Lista")
+
         # Tab Filtro
         tab_filtro = QWidget()
         lay_filtro = QVBoxLayout(tab_filtro)
@@ -141,6 +190,8 @@ class JanelaPrincipal(QMainWindow):
         btn_export.clicked.connect(self.exportar_csv)
         btn_limpar = QPushButton("🗑️ Limpar Tudo")
         btn_limpar.clicked.connect(self.limpar_tudo)
+
+    # filtro bar: apenas seleção e ações não-destrutivas
         bar_filtro.addWidget(lbl_prod)
         bar_filtro.addWidget(self.cmb_filtro_produto, 1)
         bar_filtro.addWidget(btn_melhor)
@@ -194,6 +245,12 @@ class JanelaPrincipal(QMainWindow):
         self.produtos = self.db.list_products()
         self.fornecedores_data = {p.nome: self.db.list_offers_by_product(p.nome) for p in self.produtos}
         self._refresh_produtos_combo()
+        # refresh new lists
+        try:
+            self._refresh_prod_list()
+            self._refresh_forn_list()
+        except Exception:
+            pass
         self.table.setRowCount(0)
         if self.cmb_filtro_produto.currentText():
             self._refresh_filtered_table()
@@ -414,6 +471,249 @@ class JanelaPrincipal(QMainWindow):
         self.statusBar().showMessage(f"Fornecedor '{fornecedor}' adicionado para '{produto}'", 3000)
         self.mark_dirty(True)
 
+    # ======= Produtos: editar / deletar =======
+    def edit_selected_product(self):
+        # prefer product selector in cadastro (cmb_produto_sel) if present, otherwise filter combo
+        nome = (self.cmb_produto_sel.currentText() if getattr(self, 'cmb_produto_sel', None) else '') or (self.cmb_filtro_produto.currentText() if getattr(self, 'cmb_filtro_produto', None) else '') or ''
+        if not nome:
+            QMessageBox.warning(self, "Atenção", "Selecione um produto para editar")
+            return
+        prod = next((p for p in self.produtos if p.nome == nome), None)
+        if not prod:
+            QMessageBox.warning(self, "Atenção", "Produto não encontrado")
+            return
+        result = self._show_edit_product_dialog(prod)
+        if not result:
+            return
+        try:
+            new_name = result['name']
+            category = result['category']
+            quantity = int(result['quantity'])
+            unit = result['unit']
+        except Exception:
+            QMessageBox.critical(self, "Erro", "Valores inválidos")
+            return
+        ok = self.db.update_product(prod.nome, new_name, category, quantity, unit)
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Produto atualizado", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao atualizar produto")
+
+    def delete_selected_product(self):
+        # prefer product selector in cadastro (cmb_produto_sel) if present, otherwise filter combo
+        nome = (self.cmb_produto_sel.currentText() if getattr(self, 'cmb_produto_sel', None) else '') or (self.cmb_filtro_produto.currentText() if getattr(self, 'cmb_filtro_produto', None) else '') or ''
+        if not nome:
+            QMessageBox.warning(self, "Atenção", "Selecione um produto para deletar")
+            return
+        count = self.db.count_offers_for_product(nome)
+        if count > 0:
+            resp = QMessageBox.question(
+                self,
+                "Confirmação",
+                f"O produto '{nome}' tem {count} fornecedor(es) associado(s).\nDeseja realmente deletar o produto e todas as ofertas relacionadas?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if resp != QMessageBox.Yes:
+                return
+        else:
+            if QMessageBox.question(self, "Confirmação", f"Deseja deletar o produto '{nome}'?") != QMessageBox.Yes:
+                return
+        ok = self.db.delete_product(nome)
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Produto deletado", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao deletar produto")
+
+    def _show_edit_product_dialog(self, prod: Produto):
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Editar Produto — {prod.nome}")
+        layout = QVBoxLayout(dlg)
+        form = QFormLayout()
+        ed_name = QLineEdit(); ed_name.setText(prod.nome)
+        cmb_cat = QComboBox()
+        cmb_cat.addItems([
+            "Biossegurança", "Semiologia", "Preventiva", "Radiologia",
+            "Odontopediatria", "Isolamento Absoluto", "Dentística",
+            "Moldagem e Prótese", "Endodontia", "Cirurgia", "Ortodontia"
+        ])
+        if prod.categoria:
+            idx = cmb_cat.findText(prod.categoria)
+            if idx >= 0:
+                cmb_cat.setCurrentIndex(idx)
+        spin_q = QSpinBox(); spin_q.setRange(1, 100000); spin_q.setValue(prod.quantidade)
+        cmb_unit = QComboBox(); cmb_unit.addItems(["Unidade", "Pacote", "Caixa", "Jogo", "Kit", "Frasco", "Litro"]) 
+        idxu = cmb_unit.findText(prod.unidade)
+        if idxu >= 0:
+            cmb_unit.setCurrentIndex(idxu)
+
+        form.addRow("Nome:", ed_name)
+        form.addRow("Categoria:", cmb_cat)
+        form.addRow("Quantidade:", spin_q)
+        form.addRow("Unidade:", cmb_unit)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        return {
+            'name': ed_name.text().strip(),
+            'category': cmb_cat.currentText().strip(),
+            'quantity': spin_q.value(),
+            'unit': cmb_unit.currentText().strip(),
+        }
+
+    # ===== handlers for Lista tab =====
+    def edit_product_from_list(self):
+        if not hasattr(self, 'prod_table'):
+            return
+        row = self.prod_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Atenção", "Selecione um produto na lista para editar")
+            return
+        name_item = self.prod_table.item(row, 1)
+        if not name_item:
+            QMessageBox.warning(self, "Atenção", "Produto inválido")
+            return
+        name = name_item.text()
+        prod = next((p for p in self.produtos if p.nome == name), None)
+        if not prod:
+            QMessageBox.warning(self, "Atenção", "Produto não encontrado")
+            return
+        result = self._show_edit_product_dialog(prod)
+        if not result:
+            return
+        try:
+            new_name = result['name']
+            category = result['category']
+            quantity = int(result['quantity'])
+            unit = result['unit']
+        except Exception:
+            QMessageBox.critical(self, "Erro", "Valores inválidos")
+            return
+        ok = self.db.update_product(prod.nome, new_name, category, quantity, unit)
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Produto atualizado", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao atualizar produto (talvez nome já exista)")
+
+    def delete_product_from_list(self):
+        if not hasattr(self, 'prod_table'):
+            return
+        row = self.prod_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Atenção", "Selecione um produto na lista para deletar")
+            return
+        name_item = self.prod_table.item(row, 1)
+        if not name_item:
+            QMessageBox.warning(self, "Atenção", "Produto inválido")
+            return
+        name = name_item.text()
+        count = self.db.count_offers_for_product(name)
+        if count > 0:
+            resp = QMessageBox.question(
+                self,
+                "Confirmação",
+                f"O produto '{name}' tem {count} fornecedor(es) associado(s).\nDeseja realmente deletar o produto e todas as ofertas relacionadas?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if resp != QMessageBox.Yes:
+                return
+        else:
+            if QMessageBox.question(self, "Confirmação", f"Deseja deletar o produto '{name}'?") != QMessageBox.Yes:
+                return
+        ok = self.db.delete_product(name)
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Produto deletado", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao deletar produto")
+
+    def edit_supplier_from_list(self):
+        if not hasattr(self, 'forn_table'):
+            return
+        row = self.forn_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Atenção", "Selecione um fornecedor na lista para editar")
+            return
+        id_item = self.forn_table.item(row, 0)
+        name_item = self.forn_table.item(row, 1)
+        if not id_item or not name_item:
+            QMessageBox.warning(self, "Atenção", "Fornecedor inválido")
+            return
+        sid = id_item.data(Qt.UserRole) or int(id_item.text())
+        name = name_item.text()
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Editar Fornecedor — {name}")
+        layout = QVBoxLayout(dlg)
+        form = QFormLayout()
+        ed_name = QLineEdit(); ed_name.setText(name)
+        form.addRow("Nome:", ed_name)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        new_name = ed_name.text().strip()
+        if not new_name:
+            QMessageBox.warning(self, "Atenção", "Nome não pode ficar vazio")
+            return
+        ok = self.db.update_supplier(int(sid), new_name)
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Fornecedor atualizado", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao atualizar fornecedor (nome talvez conflitante)")
+
+    def delete_supplier_from_list(self):
+        if not hasattr(self, 'forn_table'):
+            return
+        row = self.forn_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Atenção", "Selecione um fornecedor na lista para deletar")
+            return
+        id_item = self.forn_table.item(row, 0)
+        name_item = self.forn_table.item(row, 1)
+        if not id_item or not name_item:
+            QMessageBox.warning(self, "Atenção", "Fornecedor inválido")
+            return
+        sid = id_item.data(Qt.UserRole) or int(id_item.text())
+        name = name_item.text()
+        count = self.db.count_offers_for_supplier(int(sid))
+        if count > 0:
+            resp = QMessageBox.question(
+                self,
+                "Confirmação",
+                f"O fornecedor '{name}' tem {count} oferta(s) associadas.\nDeseja realmente deletar o fornecedor e todas as ofertas relacionadas?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if resp != QMessageBox.Yes:
+                return
+        else:
+            if QMessageBox.question(self, "Confirmação", f"Deseja deletar o fornecedor '{name}'?") != QMessageBox.Yes:
+                return
+        ok = self.db.delete_supplier(int(sid))
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Fornecedor deletado", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao deletar fornecedor")
+
     def _append_table_row(self, produto: str, f: FornecedorItem):
         r = self.table.rowCount()
         self.table.insertRow(r)
@@ -430,6 +730,9 @@ class JanelaPrincipal(QMainWindow):
         ]
         for c, val in enumerate(vals):
             item = QTableWidgetItem(val)
+            # store offer id in the first column's user role for later actions
+            if c == 0 and f.id is not None:
+                item.setData(Qt.UserRole, int(f.id))
             if c in (3, 5, 6, 7):
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.table.setItem(r, c, item)
@@ -527,6 +830,146 @@ class JanelaPrincipal(QMainWindow):
             return
         for it in self.db.list_offers_by_product(produto):
             self._append_table_row(produto, it)
+
+    # ===== Refresh lists =====
+    def _refresh_prod_list(self):
+        if not hasattr(self, 'prod_table'):
+            return
+        self.prod_table.setRowCount(0)
+        for p in self.produtos:
+            r = self.prod_table.rowCount()
+            self.prod_table.insertRow(r)
+            id_item = QTableWidgetItem(str(p.id) if p.id is not None else "")
+            id_item.setData(Qt.UserRole, int(p.id) if p.id is not None else None)
+            name_item = QTableWidgetItem(p.nome)
+            cat_item = QTableWidgetItem(p.categoria)
+            qtd_item = QTableWidgetItem(str(p.quantidade))
+            unit_item = QTableWidgetItem(p.unidade)
+            self.prod_table.setItem(r, 0, id_item)
+            self.prod_table.setItem(r, 1, name_item)
+            self.prod_table.setItem(r, 2, cat_item)
+            self.prod_table.setItem(r, 3, qtd_item)
+            self.prod_table.setItem(r, 4, unit_item)
+
+    def _refresh_forn_list(self):
+        if not hasattr(self, 'forn_table'):
+            return
+        self.forn_table.setRowCount(0)
+        for sid, name in self.db.list_suppliers():
+            r = self.forn_table.rowCount()
+            self.forn_table.insertRow(r)
+            id_item = QTableWidgetItem(str(sid))
+            id_item.setData(Qt.UserRole, int(sid))
+            name_item = QTableWidgetItem(name)
+            count_item = QTableWidgetItem(str(self.db.count_offers_for_supplier(int(sid))))
+            self.forn_table.setItem(r, 0, id_item)
+            self.forn_table.setItem(r, 1, name_item)
+            self.forn_table.setItem(r, 2, count_item)
+
+    def edit_selected_offer(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Atenção", "Selecione uma oferta na tabela para editar")
+            return
+        item = self.table.item(row, 0)
+        if item is None:
+            QMessageBox.warning(self, "Atenção", "Não foi possível identificar a oferta selecionada")
+            return
+        offer_id = item.data(Qt.UserRole)
+        if not offer_id:
+            QMessageBox.warning(self, "Atenção", "ID da oferta não disponível")
+            return
+        info = self.db.get_offer_by_id(int(offer_id))
+        if not info:
+            QMessageBox.warning(self, "Atenção", "Oferta não encontrada no banco")
+            return
+        product_name, fi = info
+        result = self._show_edit_offer_dialog(product_name, fi)
+        if not result:
+            return
+        try:
+            brand = result['brand']
+            unit_price = float(result['unit_price'])
+            quantity = int(result['quantity'])
+            freight = float(result['freight'])
+            deadline = result['deadline']
+            notes = result['notes']
+        except Exception:
+            QMessageBox.critical(self, "Erro", "Valores inválidos")
+            return
+        ok = self.db.update_offer(int(offer_id), brand, unit_price, quantity, freight, deadline, notes)
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Oferta atualizada", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao atualizar oferta")
+
+    def delete_selected_offer(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Atenção", "Selecione uma oferta na tabela para deletar")
+            return
+        item = self.table.item(row, 0)
+        if item is None:
+            QMessageBox.warning(self, "Atenção", "Não foi possível identificar a oferta selecionada")
+            return
+        offer_id = item.data(Qt.UserRole)
+        if not offer_id:
+            QMessageBox.warning(self, "Atenção", "ID da oferta não disponível")
+            return
+        if QMessageBox.question(self, "Confirmação", "Deseja realmente deletar a oferta selecionada?") != QMessageBox.Yes:
+            return
+        ok = self.db.delete_offer(int(offer_id))
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Oferta deletada", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao deletar oferta")
+
+    def _show_edit_offer_dialog(self, product_name: str, fi: FornecedorItem):
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Editar Oferta — {product_name} — {fi.fornecedor}")
+        layout = QVBoxLayout(dlg)
+        form = QFormLayout()
+        ed_brand = QLineEdit()
+        ed_brand.setText(fi.marca)
+        ed_price = QLineEdit()
+        ed_price.setText(f"{fi.preco_unitario:.2f}")
+        spin_qtd = QSpinBox()
+        spin_qtd.setRange(1, 100000)
+        spin_qtd.setValue(fi.quantidade)
+        ed_frete = QLineEdit()
+        ed_frete.setText(f"{fi.frete:.2f}")
+        ed_deadline = QLineEdit()
+        ed_deadline.setText(fi.prazo)
+        ed_notes = QLineEdit()
+        ed_notes.setText(fi.observacoes)
+
+        form.addRow("Marca:", ed_brand)
+        form.addRow("Preço Unitário (R$):", ed_price)
+        form.addRow("Quantidade:", spin_qtd)
+        form.addRow("Frete (R$):", ed_frete)
+        form.addRow("Prazo:", ed_deadline)
+        form.addRow("Observações:", ed_notes)
+
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        return {
+            'brand': ed_brand.text().strip(),
+            'unit_price': ed_price.text().strip().replace(',', '.'),
+            'quantity': spin_qtd.value(),
+            'freight': ed_frete.text().strip().replace(',', '.'),
+            'deadline': ed_deadline.text().strip(),
+            'notes': ed_notes.text().strip(),
+        }
 
 
 class Database:
@@ -635,15 +1078,16 @@ class Database:
 
     def list_products(self) -> List[Produto]:
         cur = self.conn.cursor()
-        cur.execute("SELECT name, category, quantity, unit FROM products ORDER BY name COLLATE NOCASE")
+        cur.execute("SELECT id, name, category, quantity, unit FROM products ORDER BY name COLLATE NOCASE")
         rows = cur.fetchall()
-        return [Produto(nome=r[0], categoria=r[1] or '', quantidade=int(r[2]), unidade=r[3] or 'Unidade') for r in rows]
+        return [Produto(id=int(r[0]), nome=r[1], categoria=r[2] or '', quantidade=int(r[3]), unidade=r[4] or 'Unidade') for r in rows]
 
     def list_offers_by_product(self, product_name: str) -> List[FornecedorItem]:
         cur = self.conn.cursor()
         cur.execute(
             """
-            SELECT s.name as fornecedor, o.brand, o.unit_price, o.quantity, o.freight, o.deadline, o.notes
+            SELECT o.id as offer_id, s.id as supplier_id, s.name as fornecedor,
+                   o.brand, o.unit_price, o.quantity, o.freight, o.deadline, o.notes
             FROM offers o
             JOIN products p ON p.id = o.product_id
             JOIN suppliers s ON s.id = o.supplier_id
@@ -655,10 +1099,137 @@ class Database:
         rows = cur.fetchall()
         items: List[FornecedorItem] = []
         for r in rows:
+            # r: offer_id, supplier_id, fornecedor, brand, unit_price, quantity, freight, deadline, notes
             items.append(FornecedorItem(
-                fornecedor=r[0], marca=r[1] or '', preco_unitario=float(r[2]), quantidade=int(r[3]), frete=float(r[4]), prazo=r[5] or '', observacoes=r[6] or ''
+                id=int(r[0]) if r[0] is not None else None,
+                supplier_id=int(r[1]) if r[1] is not None else None,
+                fornecedor=r[2] or '',
+                marca=r[3] or '',
+                preco_unitario=float(r[4]),
+                quantidade=int(r[5]),
+                frete=float(r[6]),
+                prazo=r[7] or '',
+                observacoes=r[8] or ''
             ))
         return items
+
+    # Suppliers management
+    def list_suppliers(self) -> List[tuple]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT id, name FROM suppliers ORDER BY name COLLATE NOCASE")
+        return cur.fetchall()
+
+    def count_offers_for_supplier(self, supplier_id: int) -> int:
+        cur = self.conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM offers WHERE supplier_id = ?", (supplier_id,))
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+    def update_supplier(self, supplier_id: int, new_name: str) -> bool:
+        cur = self.conn.cursor()
+        try:
+            cur.execute("UPDATE suppliers SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_name, supplier_id))
+            self.conn.commit()
+            return cur.rowcount > 0
+        except sqlite3.IntegrityError:
+            return False
+
+    def delete_supplier(self, supplier_id: int) -> bool:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def get_offer_by_id(self, offer_id: int):
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT o.id, o.product_id, p.name as product_name, o.supplier_id, s.name as supplier_name,
+                   o.brand, o.unit_price, o.quantity, o.freight, o.deadline, o.notes
+            FROM offers o
+            JOIN products p ON p.id = o.product_id
+            JOIN suppliers s ON s.id = o.supplier_id
+            WHERE o.id = ?
+            """,
+            (offer_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        # map to FornecedorItem and include product name
+        fi = FornecedorItem(
+            id=int(row[0]),
+            supplier_id=int(row[3]) if row[3] is not None else None,
+            fornecedor=row[4] or '',
+            marca=row[5] or '',
+            preco_unitario=float(row[6]),
+            quantidade=int(row[7]),
+            frete=float(row[8]),
+            prazo=row[9] or '',
+            observacoes=row[10] or ''
+        )
+        return (row[2], fi)
+
+    def delete_offer(self, offer_id: int) -> bool:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM offers WHERE id = ?", (offer_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def update_offer(self, offer_id: int, brand: str, unit_price: float, quantity: int, freight: float, deadline: str, notes: str) -> bool:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            UPDATE offers
+            SET brand = ?, unit_price = ?, quantity = ?, freight = ?, deadline = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (brand, unit_price, quantity, freight, deadline, notes, offer_id),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def count_offers_for_product(self, product_name: str) -> int:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM offers o
+            JOIN products p ON p.id = o.product_id
+            WHERE p.name = ?
+            """,
+            (product_name,)
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+    def delete_product(self, product_name: str) -> bool:
+        cur = self.conn.cursor()
+        cur.execute("SELECT id FROM products WHERE name = ?", (product_name,))
+        row = cur.fetchone()
+        if not row:
+            return False
+        pid = int(row[0])
+        cur.execute("DELETE FROM products WHERE id = ?", (pid,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def update_product(self, old_name: str, new_name: str, category: str, quantity: int, unit: str) -> bool:
+        cur = self.conn.cursor()
+        cur.execute("SELECT id FROM products WHERE name = ?", (old_name,))
+        row = cur.fetchone()
+        if not row:
+            return False
+        pid = int(row[0])
+        try:
+            cur.execute(
+                "UPDATE products SET name = ?, category = ?, quantity = ?, unit = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (new_name, category, quantity, unit, pid),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+        except sqlite3.IntegrityError:
+            # name conflict or other integrity issue
+            return False
 
     def _sanitize_filename(self, name: str) -> str:
         if platform.system() == 'Windows':
