@@ -63,7 +63,7 @@ class JanelaPrincipal(QMainWindow):
 
         # Dados
         self.produtos: List[Produto] = []
-        self.fornecedores_data: Dict[str, List[FornecedorItem]] = {}
+        self.ofertas_data: Dict[str, List[FornecedorItem]] = {}
         self.current_file: Path | None = None
         self.is_dirty: bool = False
         # Banco de dados SQLite
@@ -106,8 +106,8 @@ class JanelaPrincipal(QMainWindow):
         form_prod.addRow("Unidade:", self.cmb_unidade)
         form_prod.addRow("", btn_add_prod)
 
-        # Cadastro de Fornecedor
-        grp_forn = QGroupBox("Cadastro de Fornecedores")
+    # Cadastro de Ofertas
+        grp_forn = QGroupBox("Cadastro de Ofertas")
         form_f = QFormLayout(grp_forn)
         self.cmb_produto_sel = QComboBox()
         self.ed_fornecedor = QLineEdit()
@@ -118,8 +118,8 @@ class JanelaPrincipal(QMainWindow):
         self.ed_prazo = QLineEdit()
         self.ed_prazo.setText("3 dias")
         self.ed_obs = QLineEdit()
-        btn_add_forn = QPushButton("➕ Adicionar Fornecedor")
-        btn_add_forn.clicked.connect(self.adicionar_fornecedor)
+        btn_add_forn = QPushButton("➕ Adicionar Oferta")
+        btn_add_forn.clicked.connect(self.adicionar_oferta)
 
         # product selector (no inline edit/delete here - Lista tab centraliza edição/remoção)
         form_f.addRow("Produto:", self.cmb_produto_sel)
@@ -159,8 +159,8 @@ class JanelaPrincipal(QMainWindow):
         self.lista_tabs.addTab(produtos_tab, "Produtos")
 
         # Fornecedores tab
-        fornecedores_tab = QWidget()
-        lay_fornecedores = QVBoxLayout(fornecedores_tab)
+        ofertas_tab = QWidget()
+        lay_fornecedores = QVBoxLayout(ofertas_tab)
         forn_bar = QHBoxLayout()
         btn_edit_forn = QPushButton("✏️ Editar Oferta")
         btn_edit_forn.clicked.connect(self.edit_offer_from_list)
@@ -178,7 +178,7 @@ class JanelaPrincipal(QMainWindow):
         # esconder a coluna offer_id (usada internamente)
         self.forn_table.hideColumn(0)
         lay_fornecedores.addWidget(self.forn_table)
-        self.lista_tabs.addTab(fornecedores_tab, "Fornecedores")
+        self.lista_tabs.addTab(ofertas_tab, "Ofertas")
 
         lay_lista.addWidget(self.lista_tabs)
         self.tabs.addTab(tab_lista, "Lista")
@@ -245,7 +245,7 @@ class JanelaPrincipal(QMainWindow):
 
     def _load_from_db_to_memory(self):
         self.produtos = self.db.list_products()
-        self.fornecedores_data = {p.nome: self.db.list_offers_by_product(p.nome) for p in self.produtos}
+        self.ofertas_data = {p.nome: self.db.list_offers_by_product(p.nome) for p in self.produtos}
         self._refresh_produtos_combo()
         # refresh new lists
         try:
@@ -438,7 +438,7 @@ class JanelaPrincipal(QMainWindow):
         self.cmb_filtro_produto.blockSignals(False)
         self._refresh_filtered_table()
 
-    def adicionar_fornecedor(self):
+    def adicionar_oferta(self):
         produto = self.cmb_produto_sel.currentText()
         fornecedor = self.ed_fornecedor.text().strip()
         marca = self.ed_marca.text().strip()
