@@ -162,15 +162,20 @@ class JanelaPrincipal(QMainWindow):
         fornecedores_tab = QWidget()
         lay_fornecedores = QVBoxLayout(fornecedores_tab)
         forn_bar = QHBoxLayout()
-        btn_edit_forn = QPushButton("✏️ Editar Fornecedor")
-        btn_edit_forn.clicked.connect(self.edit_supplier_from_list)
-        btn_del_forn = QPushButton("🗑️ Deletar Fornecedor")
-        btn_del_forn.clicked.connect(self.delete_supplier_from_list)
+        btn_edit_forn = QPushButton("✏️ Editar Oferta")
+        btn_edit_forn.clicked.connect(self.edit_offer_from_list)
+        btn_del_forn = QPushButton("🗑️ Deletar Oferta")
+        btn_del_forn.clicked.connect(self.delete_offer_from_list)
         forn_bar.addWidget(btn_edit_forn)
         forn_bar.addWidget(btn_del_forn)
         lay_fornecedores.addLayout(forn_bar)
-        self.forn_table = QTableWidget(0, 3)
-        self.forn_table.setHorizontalHeaderLabels(["ID", "Fornecedor", "#Ofertas"])
+        # agora a tabela de fornecedores exibe as ofertas completas (uma linha por oferta)
+        self.forn_table = QTableWidget(0, 11)
+        self.forn_table.setHorizontalHeaderLabels([
+            "offer_id", "Produto", "Fornecedor", "Marca", "Preço Unit.", "Qtd",
+            "Subtotal", "Frete", "Total", "Prazo", "Observações"
+        ])
+        # esconder a coluna offer_id (usada internamente)
         self.forn_table.hideColumn(0)
         lay_fornecedores.addWidget(self.forn_table)
         self.lista_tabs.addTab(fornecedores_tab, "Fornecedores")
@@ -637,79 +642,12 @@ class JanelaPrincipal(QMainWindow):
             QMessageBox.critical(self, "Erro", "Falha ao deletar produto")
 
     def edit_supplier_from_list(self):
-        if not hasattr(self, 'forn_table'):
-            return
-        row = self.forn_table.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Atenção", "Selecione um fornecedor na lista para editar")
-            return
-        id_item = self.forn_table.item(row, 0)
-        name_item = self.forn_table.item(row, 1)
-        if not id_item or not name_item:
-            QMessageBox.warning(self, "Atenção", "Fornecedor inválido")
-            return
-        sid = id_item.data(Qt.UserRole) or int(id_item.text())
-        name = name_item.text()
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"Editar Fornecedor — {name}")
-        layout = QVBoxLayout(dlg)
-        form = QFormLayout()
-        ed_name = QLineEdit(); ed_name.setText(name)
-        form.addRow("Nome:", ed_name)
-        layout.addLayout(form)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dlg.accept)
-        buttons.rejected.connect(dlg.reject)
-        layout.addWidget(buttons)
-        if dlg.exec() != QDialog.Accepted:
-            return
-        new_name = ed_name.text().strip()
-        if not new_name:
-            QMessageBox.warning(self, "Atenção", "Nome não pode ficar vazio")
-            return
-        ok = self.db.update_supplier(int(sid), new_name)
-        if ok:
-            self._load_from_db_to_memory()
-            self.statusBar().showMessage("Fornecedor atualizado", 3000)
-            self.mark_dirty(True)
-        else:
-            QMessageBox.critical(self, "Erro", "Falha ao atualizar fornecedor (nome talvez conflitante)")
+        # antigo: editar fornecedor. Agora ofertas são mostradas aqui; delegar para edição de oferta
+        QMessageBox.information(self, "Atenção", "Use 'Editar Oferta' para alterar os detalhes cadastrados (marca, preço, frete, etc.)")
 
     def delete_supplier_from_list(self):
-        if not hasattr(self, 'forn_table'):
-            return
-        row = self.forn_table.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Atenção", "Selecione um fornecedor na lista para deletar")
-            return
-        id_item = self.forn_table.item(row, 0)
-        name_item = self.forn_table.item(row, 1)
-        if not id_item or not name_item:
-            QMessageBox.warning(self, "Atenção", "Fornecedor inválido")
-            return
-        sid = id_item.data(Qt.UserRole) or int(id_item.text())
-        name = name_item.text()
-        count = self.db.count_offers_for_supplier(int(sid))
-        if count > 0:
-            resp = QMessageBox.question(
-                self,
-                "Confirmação",
-                f"O fornecedor '{name}' tem {count} oferta(s) associadas.\nDeseja realmente deletar o fornecedor e todas as ofertas relacionadas?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if resp != QMessageBox.Yes:
-                return
-        else:
-            if QMessageBox.question(self, "Confirmação", f"Deseja deletar o fornecedor '{name}'?") != QMessageBox.Yes:
-                return
-        ok = self.db.delete_supplier(int(sid))
-        if ok:
-            self._load_from_db_to_memory()
-            self.statusBar().showMessage("Fornecedor deletado", 3000)
-            self.mark_dirty(True)
-        else:
-            QMessageBox.critical(self, "Erro", "Falha ao deletar fornecedor")
+        # antigo: deletar fornecedor. Agora ofertas são mostradas aqui; delegar para exclusão de oferta
+        QMessageBox.information(self, "Atenção", "Use 'Deletar Oferta' para remover o registro específico de oferta.")
 
     def _append_table_row(self, produto: str, f: FornecedorItem):
         r = self.table.rowCount()
@@ -843,16 +781,36 @@ class JanelaPrincipal(QMainWindow):
         if not hasattr(self, 'forn_table'):
             return
         self.forn_table.setRowCount(0)
-        for sid, name in self.db.list_suppliers():
+        # preencher com todas as ofertas (uma por linha)
+        for row in self.db.list_all_offers():
+            # row: offer_id, product_name, supplier_name, brand, unit_price, quantity, freight, deadline, notes
+            offer_id, product_name, supplier_name, brand, unit_price, quantity, freight, deadline, notes = row
             r = self.forn_table.rowCount()
             self.forn_table.insertRow(r)
-            id_item = QTableWidgetItem(str(sid))
-            id_item.setData(Qt.UserRole, int(sid))
-            name_item = QTableWidgetItem(name)
-            count_item = QTableWidgetItem(str(self.db.count_offers_for_supplier(int(sid))))
+            id_item = QTableWidgetItem(str(offer_id))
+            id_item.setData(Qt.UserRole, int(offer_id))
+            prod_item = QTableWidgetItem(product_name)
+            forn_item = QTableWidgetItem(supplier_name)
+            brand_item = QTableWidgetItem(brand or '')
+            price_item = QTableWidgetItem(f"R$ {float(unit_price):.2f}")
+            qtd_item = QTableWidgetItem(str(int(quantity)))
+            subtotal = float(unit_price) * int(quantity)
+            subtotal_item = QTableWidgetItem(f"R$ {subtotal:.2f}")
+            freight_item = QTableWidgetItem(f"R$ {float(freight):.2f}")
+            total_item = QTableWidgetItem(f"R$ {subtotal + float(freight):.2f}")
+            prazo_item = QTableWidgetItem(deadline or '')
+            notes_item = QTableWidgetItem(notes or '')
             self.forn_table.setItem(r, 0, id_item)
-            self.forn_table.setItem(r, 1, name_item)
-            self.forn_table.setItem(r, 2, count_item)
+            self.forn_table.setItem(r, 1, prod_item)
+            self.forn_table.setItem(r, 2, forn_item)
+            self.forn_table.setItem(r, 3, brand_item)
+            self.forn_table.setItem(r, 4, price_item)
+            self.forn_table.setItem(r, 5, qtd_item)
+            self.forn_table.setItem(r, 6, subtotal_item)
+            self.forn_table.setItem(r, 7, freight_item)
+            self.forn_table.setItem(r, 8, total_item)
+            self.forn_table.setItem(r, 9, prazo_item)
+            self.forn_table.setItem(r, 10, notes_item)
 
     def edit_selected_offer(self):
         row = self.table.currentRow()
@@ -892,6 +850,66 @@ class JanelaPrincipal(QMainWindow):
             self.mark_dirty(True)
         else:
             QMessageBox.critical(self, "Erro", "Falha ao atualizar oferta")
+
+    def edit_offer_from_list(self):
+        if not hasattr(self, 'forn_table'):
+            return
+        row = self.forn_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Atenção", "Selecione uma oferta na lista para editar")
+            return
+        item = self.forn_table.item(row, 0)
+        if item is None:
+            QMessageBox.warning(self, "Atenção", "Não foi possível identificar a oferta selecionada")
+            return
+        offer_id = item.data(Qt.UserRole) or int(item.text())
+        info = self.db.get_offer_by_id(int(offer_id))
+        if not info:
+            QMessageBox.warning(self, "Atenção", "Oferta não encontrada no banco")
+            return
+        product_name, fi = info
+        result = self._show_edit_offer_dialog(product_name, fi)
+        if not result:
+            return
+        try:
+            brand = result['brand']
+            unit_price = float(result['unit_price'])
+            quantity = int(result['quantity'])
+            freight = float(result['freight'])
+            deadline = result['deadline']
+            notes = result['notes']
+        except Exception:
+            QMessageBox.critical(self, "Erro", "Valores inválidos")
+            return
+        ok = self.db.update_offer(int(offer_id), brand, unit_price, quantity, freight, deadline, notes)
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Oferta atualizada", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao atualizar oferta")
+
+    def delete_offer_from_list(self):
+        if not hasattr(self, 'forn_table'):
+            return
+        row = self.forn_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Atenção", "Selecione uma oferta na lista para deletar")
+            return
+        item = self.forn_table.item(row, 0)
+        if item is None:
+            QMessageBox.warning(self, "Atenção", "Não foi possível identificar a oferta selecionada")
+            return
+        offer_id = item.data(Qt.UserRole) or int(item.text())
+        if QMessageBox.question(self, "Confirmação", "Deseja realmente deletar a oferta selecionada?") != QMessageBox.Yes:
+            return
+        ok = self.db.delete_offer(int(offer_id))
+        if ok:
+            self._load_from_db_to_memory()
+            self.statusBar().showMessage("Oferta deletada", 3000)
+            self.mark_dirty(True)
+        else:
+            QMessageBox.critical(self, "Erro", "Falha ao deletar oferta")
 
     def delete_selected_offer(self):
         row = self.table.currentRow()
@@ -1100,6 +1118,23 @@ class Database:
                 observacoes=r[8] or ''
             ))
         return items
+
+    def list_all_offers(self) -> List[tuple]:
+        """Return all offers with product and supplier names.
+
+        Returns list of tuples: (offer_id, product_name, supplier_name, brand, unit_price, quantity, freight, deadline, notes)
+        """
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT o.id, p.name as product_name, s.name as supplier_name, o.brand, o.unit_price, o.quantity, o.freight, o.deadline, o.notes
+            FROM offers o
+            JOIN products p ON p.id = o.product_id
+            JOIN suppliers s ON s.id = o.supplier_id
+            ORDER BY p.name COLLATE NOCASE, (o.unit_price * o.quantity + o.freight) ASC
+            """
+        )
+        return cur.fetchall()
 
     # Suppliers management
     def list_suppliers(self) -> List[tuple]:
