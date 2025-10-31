@@ -1,0 +1,144 @@
+name: build-executables
+on:
+  push:
+    branches:
+      - develop
+    tags:
+      - 'v*'
+permissions:
+  contents: write
+jobs:
+  build_windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build (Windows)
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name OdontoPrice qt_app.py
+
+      - name: Upload artifact (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: OdontoPrice-windows
+          path: dist/OdontoPrice.exe
+
+  build_macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build (macOS)
+        run: |
+          pyinstaller --noconfirm --windowed --name OdontoPrice qt_app.py
+
+      - name: Package (macOS zip)
+        run: |
+          cd dist
+          zip -r OdontoPrice-macos.zip OdontoPrice.app || true
+
+      - name: Upload artifact (macOS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: OdontoPrice-macos
+          path: dist/OdontoPrice-macos.zip
+
+  publish:
+    name: Publish Release/Prerelease
+    needs: [build_windows, build_macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: OdontoPrice-windows
+          path: artifacts/windows
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: OdontoPrice-macos
+          path: artifacts/macos
+
+      - name: Publish prerelease (develop)
+        if: github.ref == 'refs/heads/develop'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: homolog-${{ github.run_number }}-${{ github.sha }}
+          name: Homolog ${{ github.run_number }}
+          prerelease: true
+          draft: false
+          files: |
+            artifacts/windows/OdontoPrice.exe
+            artifacts/macos/OdontoPrice-macos.zip
+
+      - name: Publish release (tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/windows/OdontoPrice.exe
+            artifacts/macos/OdontoPrice-macos.zip
+
+      # Publish pre-release (Homolog) for develop branch
+      - name: Publish prerelease (Windows)
+        if: github.ref == 'refs/heads/develop' && contains(matrix.os, 'windows')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: homolog-${{ github.run_number }}-${{ github.sha }}
+          name: Homolog ${{ github.run_number }}
+          prerelease: true
+          draft: false
+          files: |
+            dist/OdontoPrice.exe
+
+      - name: Publish prerelease (macOS)
+        if: github.ref == 'refs/heads/develop' && contains(matrix.os, 'macos')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: homolog-${{ github.run_number }}-${{ github.sha }}
+          name: Homolog ${{ github.run_number }}
+          prerelease: true
+          draft: false
+          files: |
+            dist/OdontoPrice-macos.zip
+
+      # Publish full Release for version tags (gitflow)
+      - name: Upload to GitHub Release (Windows)
+        if: startsWith(github.ref, 'refs/tags/') && contains(matrix.os, 'windows')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/OdontoPrice.exe
+
+      - name: Upload to GitHub Release (macOS)
+        if: startsWith(github.ref, 'refs/tags/') && contains(matrix.os, 'macos')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/OdontoPrice-macos.zip
+

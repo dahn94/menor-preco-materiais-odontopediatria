@@ -49,24 +49,38 @@ Um aplicativo desktop multiplataforma para comparar preços de produtos odontol�
 #### Para criar um executável na sua plataforma:
 
 ```bash
-# Instalar PyInstaller
-pip install pyinstaller
-
-# Criar executável
-python build.py
+# (Removido) Use o workflow do GitHub para gerar .exe do Windows
 ```
 
 O executável será criado na pasta `dist/`.
 
 #### Plataformas suportadas:
 
-- **Windows**: Cria arquivo `.exe`
-- **macOS**: Cria executável Unix
-- **Linux**: Cria executável ELF
+- **Windows**: use o workflow do GitHub Actions para gerar `.exe`
+- **macOS**: crie executável Unix localmente com PyInstaller (opcional)
+- **Linux**: crie executável ELF localmente com PyInstaller (opcional)
 
 ### Opção 3: Download de executáveis pré-compilados
 
-Você pode encontrar executáveis pré-compilados na seção de Releases do repositório.
+Você pode baixar os binários gerados automaticamente pelos workflows na aba Actions do GitHub (artefatos do job mais recente em `main`).
+
+## 🛠️ Build via GitHub Actions (GitFlow: Homolog e Release)
+
+1. Suba este repositório para o GitHub.
+2. O workflow já está em `.github/workflows/build-exec.yml`.
+   - Homolog (prerelease): roda automaticamente em push/merge para `develop` e publica uma prerelease com os binários.
+   - Release: ao criar uma tag `vX.Y.Z` (ex.: `v1.0.0`) ele publica uma Release com os binários.
+
+Permissões necessárias (repo):
+- Settings → Actions → General → Workflow permissions → selecione “Read and write permissions”.
+
+Como baixar:
+- Homolog: merge/push em `develop` → Release (prerelease) “Homolog <run_number>” com `OdontoPrice.exe` e `OdontoPrice-macos.zip`.
+- Release: criar tag `vX.Y.Z` → Release com os binários anexados.
+
+Artefatos gerados:
+- Windows: `OdontoPrice-windows` (contém `dist/OdontoPrice.exe`)
+- macOS: `OdontoPrice-macos` (contém `dist/OdontoPrice-macos.zip` com o bundle `OdontoPrice.app`)
 
 ## 🖥️ Compatibilidade Multiplataforma
 
@@ -165,8 +179,8 @@ Contribuições são bem-vindas! Por favor:
 Para suporte ou reportar bugs:
 
 - Abra uma issue no GitHub
-- Envie um e-mail para: [seu-email@exemplo.com]
+- Envie um e-mail para: [santana.dahn@gmail.com]
 
 ---
 
-**Desenvolvido com ❤️ para a comunidade odontológica**
+**Desenvolvido com ❤️ para a minha namorada e a comunidade odontológica**
