@@ -1,1 +1,4 @@
 .venv/
+dados.sqlite
+dados.sqlite-shm
+dados.sqlite-wal
