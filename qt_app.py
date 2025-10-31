@@ -186,17 +186,14 @@ class JanelaPrincipal(QMainWindow):
         self.cmb_filtro_produto = QComboBox()
         btn_melhor = QPushButton("🏆 Melhor valor final")
         btn_melhor.clicked.connect(self.mostrar_melhor_opcao)
-        btn_export = QPushButton("💾 Exportar CSV")
+        btn_export = QPushButton("💾 Exportar CSV (Melhores)")
         btn_export.clicked.connect(self.exportar_csv)
-        btn_limpar = QPushButton("🗑️ Limpar Tudo")
-        btn_limpar.clicked.connect(self.limpar_tudo)
 
     # filtro bar: apenas seleção e ações não-destrutivas
         bar_filtro.addWidget(lbl_prod)
         bar_filtro.addWidget(self.cmb_filtro_produto, 1)
         bar_filtro.addWidget(btn_melhor)
         bar_filtro.addWidget(btn_export)
-        bar_filtro.addWidget(btn_limpar)
 
         self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels([
@@ -748,11 +745,6 @@ class JanelaPrincipal(QMainWindow):
             QMessageBox.warning(self, "Atenção", "Nenhum fornecedor cadastrado!")
             return
         melhor = min(itens, key=lambda x: x.total)
-        diffs = []
-        for it in sorted(itens, key=lambda x: x.total):
-            if it is melhor:
-                continue
-            diffs.append(f"• {it.fornecedor}: R$ {it.total:.2f} (+R$ {it.total - melhor.total:.2f})")
         msg = (
             f"🏆 MELHOR OPÇÃO PARA: {produto}\n\n"
             f"Fornecedor: {melhor.fornecedor}\n"
@@ -762,43 +754,39 @@ class JanelaPrincipal(QMainWindow):
             f"  • Quantidade: {melhor.quantidade}\n"
             f"  • Subtotal: R$ {melhor.subtotal:.2f}\n"
             f"  • Frete: R$ {melhor.frete:.2f}\n"
-            f"Prazo: {melhor.prazo}\n\n"
-            f"📊 COMPARAÇÃO COM OUTROS:\n" + ("\n".join(diffs) if diffs else "—")
+            f"Prazo: {melhor.prazo}\n"
         )
         QMessageBox.information(self, "Melhor Opção", msg)
 
     def exportar_csv(self):
+        # Exporta um único CSV com os melhores valores por produto
         if not self.produtos:
             QMessageBox.warning(self, "Atenção", "Nenhum produto cadastrado!")
             return
-        dirpath = QFileDialog.getExistingDirectory(self, "Selecione a pasta para salvar")
-        if not dirpath:
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar CSV (melhores valores)", "melhores_precos.csv", "CSV (*.csv)")
+        if not path:
             return
-        pasta = Path(dirpath)
-
-        for prod in self.produtos:
-            itens = self.db.list_offers_by_product(prod.nome)
-            if not itens:
-                continue
-            caminho = pasta / f"{self._sanitize_filename(prod.nome) }.csv"
-            with open(caminho, 'w', newline='', encoding='utf-8-sig') as fp:
-                w = csv.writer(fp)
-                w.writerow(['PRODUTO', prod.nome])
-                w.writerow(['CATEGORIA', prod.categoria])
-                w.writerow(['QUANTIDADE', prod.quantidade])
-                w.writerow(['UNIDADE', prod.unidade])
-                w.writerow([])
-                w.writerow(['Fornecedor', 'Marca', 'Preco_Unitario', 'Quantidade', 'Subtotal', 'Frete', 'Total', 'Prazo', 'Observacoes'])
-                for it in sorted(itens, key=lambda x: x.total):
-                    w.writerow([
-                        it.fornecedor, it.marca, it.preco_unitario, it.quantidade,
-                        it.subtotal, it.frete, it.total, it.prazo, it.observacoes
-                    ])
-                w.writerow([])
+        if not path.lower().endswith('.csv'):
+            path += '.csv'
+        caminho = Path(path)
+        with open(caminho, 'w', newline='', encoding='utf-8-sig') as fp:
+            w = csv.writer(fp)
+            # Cabeçalho
+            w.writerow([
+                'PRODUTO', 'CATEGORIA', 'QUANTIDADE', 'UNIDADE',
+                'FORNECEDOR', 'MARCA', 'PRECO_UNITARIO', 'QTD_OFERTA', 'SUBTOTAL', 'FRETE', 'TOTAL', 'PRAZO', 'OBSERVACOES'
+            ])
+            for prod in self.produtos:
+                itens = self.db.list_offers_by_product(prod.nome)
+                if not itens:
+                    continue
                 melhor = min(itens, key=lambda x: x.total)
-                w.writerow(['MELHOR_OPCAO', melhor.fornecedor])
-                w.writerow(['MENOR_PRECO', melhor.total])
-        QMessageBox.information(self, "Sucesso", f"CSV(s) exportados para:\n{pasta}")
+                w.writerow([
+                    prod.nome, prod.categoria, prod.quantidade, prod.unidade,
+                    melhor.fornecedor, melhor.marca, f"{melhor.preco_unitario:.2f}", melhor.quantidade,
+                    f"{melhor.subtotal:.2f}", f"{melhor.frete:.2f}", f"{melhor.total:.2f}", melhor.prazo, melhor.observacoes
+                ])
+        QMessageBox.information(self, "Sucesso", f"CSV exportado com melhores valores para:\n{caminho}")
 
     def limpar_tudo(self):
         if QMessageBox.question(self, "Confirmação", "Deseja realmente limpar todos os dados?") != QMessageBox.Yes:
